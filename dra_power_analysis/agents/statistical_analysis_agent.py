@@ -1,63 +1,113 @@
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, AsyncGenerator
 import pandas as pd
 import numpy as np
-from .base_agent import Agent
+import asyncio # For potentially long-running CPU-bound tasks
+
+from google.adk.agents import BaseAgent, InvocationContext
+from google.adk.events import Event, EventActions, types
 
 # For more advanced stats, might need: from scipy import stats
 
 
-class StatisticalAnalysisAgent(Agent):
+class StatisticalAnalysisAgent(BaseAgent):
     """
     Performs time-series analysis and statistical computations on power and operational data.
     """
 
-    def __init__(self):
-        super().__init__("StatisticalAnalysisAgent")
+    def __init__(self, name: str, description: str, **kwargs):
+        super().__init__(name=name, description=description, **kwargs)
+        self.logger.info(f"StatisticalAnalysisAgent '{self.name}' initialized.")
 
-    def execute(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Args:
-            data (Dict[str, Any]): power_consumption_data (pd.DataFrame), sensor_data (optional)
-        """
-        required_keys = ["power_consumption_data"]
-        if not self._validate_input(data, required_keys=required_keys):
-            return self._handle_error(
-                "Missing 'power_consumption_data' for statistical analysis."
-            )
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        self.logger.info(f"'{self.name}' starting statistical analysis.")
 
-        power_df = data.get("power_consumption_data")
+        power_df = ctx.session.state.get("power_consumption_data")
+
+        if power_df is None:
+            error_msg = "'power_consumption_data' not found in session state."
+            self.logger.error(error_msg)
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
+
         if not isinstance(power_df, pd.DataFrame) or power_df.empty:
-            return self._handle_error(
-                "'power_consumption_data' must be a non-empty Pandas DataFrame."
-            )
+            error_msg = "'power_consumption_data' must be a non-empty Pandas DataFrame."
+            self.logger.warning(error_msg) # Non-critical if empty, but log warning
+            # Set empty/default results
+            ctx.session.state["statistical_summary"] = {}
+            ctx.session.state["time_series_aggregations"] = {"hourly": {}, "daily": {}}
+            ctx.session.state["correlation_analysis"] = {}
+            ctx.session.state["efficiency_trends"] = {}
+            ctx.session.state["visualization_hints"] = []
+            ctx.session.state["status_stats_analysis"] = "success_no_data"
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(f"Statistical Analysis: {error_msg}")]))
+            return
 
         try:
             if not pd.api.types.is_datetime64_any_dtype(power_df["timestamp"]):
                 power_df["timestamp"] = pd.to_datetime(power_df["timestamp"])
         except Exception as e:
-            return self._handle_error(
-                "Failed to convert 'timestamp' in power_consumption_data.", exception=e
-            )
+            error_msg = f"Failed to convert 'timestamp' in power_consumption_data: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            ctx.session.state["status_stats_analysis"] = "error"
+            ctx.session.state["error_message_stats_analysis"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
 
         if "electrical_power_kw" not in power_df.columns:
-            return self._handle_error(
-                "Missing 'electrical_power_kw' in power_consumption_data."
-            )
-        try:
-            power_df["electrical_power_kw"] = pd.to_numeric(
-                power_df["electrical_power_kw"], errors="coerce"
-            )
-            # Drop rows where essential power data became NaN after coercion
-            power_df.dropna(subset=["electrical_power_kw"], inplace=True)
-            if power_df.empty:
-                return self._handle_error(
-                    "No valid 'electrical_power_kw' data after numeric conversion."
-                )
-        except Exception as e:
-            return self._handle_error(
-                "Failed to convert 'electrical_power_kw' to numeric.", exception=e
-            )
+            error_msg = "Missing 'electrical_power_kw' in power_consumption_data."
+            self.logger.error(error_msg)
+            ctx.session.state["status_stats_analysis"] = "error"
+            ctx.session.state["error_message_stats_analysis"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
 
+        try:
+            power_df["electrical_power_kw"] = pd.to_numeric(power_df["electrical_power_kw"], errors="coerce")
+            power_df.dropna(subset=["electrical_power_kw"], inplace=True) # Essential for stats
+            if power_df.empty:
+                error_msg = "No valid 'electrical_power_kw' data after numeric conversion and NaN drop."
+                self.logger.warning(error_msg)
+                # Set empty/default results
+                ctx.session.state["statistical_summary"] = {}
+                ctx.session.state["time_series_aggregations"] = {"hourly": {}, "daily": {}}
+                ctx.session.state["correlation_analysis"] = {}
+                ctx.session.state["efficiency_trends"] = {}
+                ctx.session.state["visualization_hints"] = []
+                ctx.session.state["status_stats_analysis"] = "success_no_valid_power_data"
+                yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(f"Statistical Analysis: {error_msg}")]))
+                return
+        except Exception as e:
+            error_msg = f"Failed to convert 'electrical_power_kw' to numeric: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            ctx.session.state["status_stats_analysis"] = "error"
+            ctx.session.state["error_message_stats_analysis"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
+
+        # Core statistical logic, can be wrapped in a helper if it becomes too large
+        try:
+            all_pump_stats, all_time_aggregations, all_correlations, all_efficiency_trends, viz_hints = self._perform_statistical_calculations(power_df.copy())
+
+            ctx.session.state["statistical_summary"] = all_pump_stats
+            ctx.session.state["time_series_aggregations"] = all_time_aggregations
+            ctx.session.state["correlation_analysis"] = all_correlations
+            ctx.session.state["efficiency_trends"] = all_efficiency_trends
+            ctx.session.state["visualization_hints"] = viz_hints
+            ctx.session.state["status_stats_analysis"] = "success"
+
+            self.logger.info("Statistical analysis completed successfully.")
+            yield Event(
+                author=self.name,
+                content=types.Content(parts=[types.Part.from_text(f"Statistical analysis complete. Generated {len(viz_hints)} visualization hints.")])
+            )
+        except Exception as e:
+            error_msg = f"Error during statistical calculations: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            ctx.session.state["status_stats_analysis"] = "error"
+            ctx.session.state["error_message_stats_analysis"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+
+    def _perform_statistical_calculations(self, power_df: pd.DataFrame) -> Tuple[Dict, Dict, Dict, Dict, List]:
         all_pump_stats: Dict[str, Any] = {}
         all_time_aggregations: Dict[str, Any] = {"hourly": {}, "daily": {}}
         all_correlations: Dict[str, Any] = {}
@@ -66,175 +116,57 @@ class StatisticalAnalysisAgent(Agent):
 
         # Overall system statistics
         if not power_df.empty:
-            system_power_df = (
-                power_df.groupby("timestamp")["electrical_power_kw"].sum().reset_index()
-            )
-            system_power_df.rename(
-                columns={"electrical_power_kw": "total_system_electrical_power_kw"},
-                inplace=True,
-            )
-
-            overall_desc_stats = self._calculate_descriptive_stats(
-                system_power_df, "total_system_electrical_power_kw", "SystemTotal"
-            )
+            system_power_df = power_df.groupby("timestamp")["electrical_power_kw"].sum().reset_index()
+            system_power_df.rename(columns={"electrical_power_kw": "total_system_electrical_power_kw"}, inplace=True)
+            overall_desc_stats = self._calculate_descriptive_stats(system_power_df, "total_system_electrical_power_kw", "SystemTotal")
             all_pump_stats["SystemTotal"] = overall_desc_stats
             if not system_power_df.empty:
-                viz_hints.append(
-                    {
-                        "type": "time_series",
-                        "data_source_column": "total_system_electrical_power_kw",
-                        "title": "Total System Electrical Power Over Time",
-                        "y_label": "Power (kW)",
-                        "data_df_name": "system_total_power_ts",
-                    }
-                )
-                viz_hints.append(
-                    {
-                        "type": "histogram",
-                        "data_source_column": "total_system_electrical_power_kw",
-                        "title": "Distribution of Total System Electrical Power",
-                        "x_label": "Power (kW)",
-                        "data_df_name": "system_total_power_hist",
-                    }
-                )
-                # Store data for viz hints
-                all_time_aggregations["system_total_power_ts"] = system_power_df[
-                    ["timestamp", "total_system_electrical_power_kw"]
-                ]
-                all_time_aggregations["system_total_power_hist"] = system_power_df[
-                    ["total_system_electrical_power_kw"]
-                ]
+                viz_hints.append({"type": "time_series", "data_source_column": "total_system_electrical_power_kw", "title": "Total System Electrical Power Over Time", "y_label": "Power (kW)", "data_df_name": "system_total_power_ts"})
+                viz_hints.append({"type": "histogram", "data_source_column": "total_system_electrical_power_kw", "title": "Distribution of Total System Electrical Power", "x_label": "Power (kW)", "data_df_name": "system_total_power_hist"})
+                all_time_aggregations["system_total_power_ts"] = system_power_df[["timestamp", "total_system_electrical_power_kw"]]
+                all_time_aggregations["system_total_power_hist"] = system_power_df[["total_system_electrical_power_kw"]]
 
         # Per-pump analysis
-        # Ensure 'pump_name' column exists
         if "pump_name" not in power_df.columns:
-            self.logger.warning(
-                "'pump_name' column not found in power_df. Skipping per-pump analysis."
-            )
+            self.logger.warning("'pump_name' column not found in power_df. Skipping per-pump analysis.")
         else:
             for pump_name, group_df in power_df.groupby("pump_name"):
-                self.logger.info(
-                    f"Performing statistical analysis for pump: {pump_name}"
-                )
-                if group_df.empty:
-                    continue
-
-                desc_stats = self._calculate_descriptive_stats(
-                    group_df, "electrical_power_kw", pump_name
-                )
+                self.logger.info(f"Performing statistical analysis for pump: {pump_name}")
+                if group_df.empty: continue
+                desc_stats = self._calculate_descriptive_stats(group_df, "electrical_power_kw", pump_name)
                 all_pump_stats[pump_name] = desc_stats
-                viz_hints.append(
-                    {
-                        "type": "time_series",
-                        "pump_name": pump_name,
-                        "data_source_column": "electrical_power_kw",
-                        "title": f"{pump_name} Electrical Power Over Time",
-                        "y_label": "Power (kW)",
-                        "data_df_name": f"{pump_name}_power_ts",
-                    }
-                )
-                all_time_aggregations[f"{pump_name}_power_ts"] = group_df[
-                    ["timestamp", "electrical_power_kw"]
-                ]
+                viz_hints.append({"type": "time_series", "pump_name": pump_name, "data_source_column": "electrical_power_kw", "title": f"{pump_name} Electrical Power Over Time", "y_label": "Power (kW)", "data_df_name": f"{pump_name}_power_ts"})
+                all_time_aggregations[f"{pump_name}_power_ts"] = group_df[["timestamp", "electrical_power_kw"]]
+                hourly_agg = self._aggregate_time_series(group_df.set_index("timestamp"), "H", pump_name)
+                daily_agg = self._aggregate_time_series(group_df.set_index("timestamp"), "D", pump_name)
+                if hourly_agg is not None: all_time_aggregations["hourly"][pump_name] = hourly_agg
+                if daily_agg is not None: all_time_aggregations["daily"][pump_name] = daily_agg
 
-                hourly_agg = self._aggregate_time_series(
-                    group_df.set_index("timestamp"), "H", pump_name
-                )
-                daily_agg = self._aggregate_time_series(
-                    group_df.set_index("timestamp"), "D", pump_name
-                )
-                if hourly_agg is not None:
-                    all_time_aggregations["hourly"][pump_name] = hourly_agg
-                if daily_agg is not None:
-                    all_time_aggregations["daily"][pump_name] = daily_agg
-
-                # Correlation requires other numeric columns like flow rate, pressure.
-                # These are dynamically named in power_df (e.g., STN01_LINE01_PUMP_A_FLOW_RATE_M3S)
-                flow_rate_col_name = next(
-                    (
-                        col
-                        for col in group_df.columns
-                        if pump_name in col and "_FLOW_RATE_M3S" in col
-                    ),
-                    None,
-                )
+                flow_rate_col_name = next((col for col in group_df.columns if pump_name in col and "_FLOW_RATE_M3S" in col), None)
                 correlation_cols = ["electrical_power_kw"]
-                if "delta_pressure_pa" in group_df.columns:
-                    correlation_cols.append("delta_pressure_pa")
-                if flow_rate_col_name:
-                    correlation_cols.append(flow_rate_col_name)
+                if "delta_pressure_pa" in group_df.columns: correlation_cols.append("delta_pressure_pa")
+                if flow_rate_col_name: correlation_cols.append(flow_rate_col_name)
 
-                # Ensure columns exist and are numeric before attempting correlation
-                valid_corr_cols = [
-                    col
-                    for col in correlation_cols
-                    if col in group_df.columns
-                    and pd.api.types.is_numeric_dtype(group_df[col])
-                ]
+                valid_corr_cols = [col for col in correlation_cols if col in group_df.columns and pd.api.types.is_numeric_dtype(group_df[col])]
                 if len(valid_corr_cols) > 1:
                     pump_corr_df = group_df[valid_corr_cols].corr()
                     all_correlations[pump_name] = pump_corr_df
-                    viz_hints.append(
-                        {
-                            "type": "correlation_matrix_heatmap",
-                            "pump_name": pump_name,
-                            "data_df_name": f"correlation_{pump_name}",
-                            "title": f"{pump_name} Correlation Matrix",
-                        }
-                    )
-                    # Store data for viz hint
+                    viz_hints.append({"type": "correlation_matrix_heatmap", "pump_name": pump_name, "data_df_name": f"correlation_{pump_name}", "title": f"{pump_name} Correlation Matrix"})
                     all_correlations[f"correlation_{pump_name}_data"] = pump_corr_df
 
-                if (
-                    "hydraulic_power_kw" in group_df.columns
-                    and "shaft_power_kw" in group_df.columns
-                ):
-                    eff_df = group_df[
-                        ["timestamp", "hydraulic_power_kw", "shaft_power_kw"]
-                    ].copy()
-                    eff_df["calculated_pump_efficiency"] = np.where(
-                        (
-                            eff_df["shaft_power_kw"] > 1e-3
-                        ),  # Avoid near-zero division, ensure meaningful power
-                        eff_df["hydraulic_power_kw"] / eff_df["shaft_power_kw"],
-                        np.nan,
-                    )
+                if "hydraulic_power_kw" in group_df.columns and "shaft_power_kw" in group_df.columns:
+                    eff_df = group_df[["timestamp", "hydraulic_power_kw", "shaft_power_kw"]].copy()
+                    eff_df["calculated_pump_efficiency"] = np.where((eff_df["shaft_power_kw"] > 1e-3), eff_df["hydraulic_power_kw"] / eff_df["shaft_power_kw"], np.nan)
                     eff_df.dropna(subset=["calculated_pump_efficiency"], inplace=True)
-                    # Clip efficiency to a realistic range [0,1] or slightly wider if needed
-                    eff_df["calculated_pump_efficiency"] = eff_df[
-                        "calculated_pump_efficiency"
-                    ].clip(0, 1.1)
-                    all_efficiency_trends[pump_name] = eff_df[
-                        ["timestamp", "calculated_pump_efficiency"]
-                    ]
+                    eff_df["calculated_pump_efficiency"] = eff_df["calculated_pump_efficiency"].clip(0, 1.1)
+                    all_efficiency_trends[pump_name] = eff_df[["timestamp", "calculated_pump_efficiency"]]
                     if not eff_df.empty:
-                        viz_hints.append(
-                            {
-                                "type": "time_series",
-                                "pump_name": pump_name,
-                                "y_col": "calculated_pump_efficiency",
-                                "title": f"{pump_name} Calculated Pump Efficiency Over Time",
-                                "y_label": "Efficiency",
-                                "data_df_name": f"{pump_name}_efficiency_trend",
-                            }
-                        )
-                        all_efficiency_trends[f"{pump_name}_efficiency_trend_data"] = (
-                            eff_df[["timestamp", "calculated_pump_efficiency"]]
-                        )
+                        viz_hints.append({"type": "time_series", "pump_name": pump_name, "y_col": "calculated_pump_efficiency", "title": f"{pump_name} Calculated Pump Efficiency Over Time", "y_label": "Efficiency", "data_df_name": f"{pump_name}_efficiency_trend"})
+                        all_efficiency_trends[f"{pump_name}_efficiency_trend_data"] = eff_df[["timestamp", "calculated_pump_efficiency"]]
 
-        self.logger.info("Statistical analysis completed.")
-        return {
-            "status": "success",
-            "statistical_summary": all_pump_stats,
-            "time_series_aggregations": all_time_aggregations,
-            "correlation_analysis": all_correlations,
-            "efficiency_trends": all_efficiency_trends,
-            "visualization_hints": viz_hints,
-        }
+        return all_pump_stats, all_time_aggregations, all_correlations, all_efficiency_trends, viz_hints
 
-    def _calculate_descriptive_stats(
-        self, df: pd.DataFrame, column_name: str, group_name: str
-    ) -> Dict[str, Any]:
+    def _calculate_descriptive_stats(self, df: pd.DataFrame, column_name: str, group_name: str) -> Dict[str, Any]:
         if column_name not in df.columns or df[column_name].empty:
             self.logger.warning(
                 f"Column {column_name} for group {group_name} is empty for stats."
