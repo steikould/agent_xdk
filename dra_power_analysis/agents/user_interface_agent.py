@@ -1,53 +1,105 @@
 import datetime
-from typing import Dict, Any, Optional, Tuple
-from .base_agent import Agent
+from typing import Dict, Any, Optional, Tuple, AsyncGenerator
+
+from google.adk.agents import BaseAgent, InvocationContext
+from google.adk.events import Event, EventActions, types
 
 
-class UserInterfaceAgent(Agent):
+class UserInterfaceAgent(BaseAgent):
     """
     Handles all user interactions, input gathering, validation, and results presentation.
+    Can operate in 'input' or 'output' role.
     """
 
-    # Configuration for validation - these could be loaded from a config file or database
-    # For now, using simple hardcoded examples
+    # Configuration for validation
     VALID_LOCATIONS = ["STN_A001", "STN_B002", "STN_C003"]
-    PIPELINE_LINE_NUMBER_FORMAT_PREFIX = "PL"  # Example: PL001, PL002
-    MAX_DATE_RANGE_DAYS = 365  # Maximum allowed days in a date range
-    MAX_PAST_DAYS_DATA_RETENTION = (
-        5 * 365
-    )  # Maximum past days for which data is available
+    PIPELINE_LINE_NUMBER_FORMAT_PREFIX = "PL"
+    MAX_DATE_RANGE_DAYS = 365
+    MAX_PAST_DAYS_DATA_RETENTION = 5 * 365
 
-    def __init__(self):
-        super().__init__("UserInterfaceAgent")
+    def __init__(self, name: str, description: str, role: str = "input", **kwargs):
+        super().__init__(name=name, description=description, **kwargs)
+        if role not in ["input", "output"]:
+            raise ValueError("Role must be 'input' or 'output'")
+        self.role = role
+        self.logger.info(f"UserInterfaceAgent '{self.name}' initialized with role: {self.role}.")
 
-    def execute(self, data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Orchestrates getting and validating user input.
-        This agent's primary role is input gathering, so it doesn't typically receive input `data`.
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        self.logger.info(f"UserInterfaceAgent '{self.name}' (role: {self.role}) starting execution.")
 
-        Returns:
-            Dict[str, Any]: A dictionary containing the validated user inputs if successful,
-                            or an error dictionary if input is invalid or user cancels.
-        """
-        self.logger.info("Starting user input process.")
-        user_input = self._get_user_input_interactive()
+        if self.role == "input":
+            try:
+                user_input = await asyncio.to_thread(self._get_user_input_interactive)
 
-        if not user_input:  # User might have cancelled or input was aborted
-            return self._handle_error("User input process aborted or cancelled.")
+                if not user_input:
+                    self.logger.warning("User input process aborted or cancelled by user.")
+                    # Escalate to stop the sequence if input is aborted
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(parts=[types.Part.from_text("User input aborted. Halting workflow.")]),
+                        actions=EventActions(escalate=True)
+                    )
+                    return
 
-        is_valid, validation_errors = self._validate_all_inputs(user_input)
+                is_valid, validation_errors = self._validate_all_inputs(user_input)
 
-        if not is_valid:
-            error_message = "Input validation failed. Errors:\n" + "\n".join(
-                validation_errors
+                if not is_valid:
+                    error_message = "Input validation failed. Errors:\n" + "\n".join(validation_errors)
+                    self.display_error(error_message) # Display error to console
+                    self.logger.error(error_message)
+                     # Escalate to stop the sequence if input is invalid
+                    yield Event(
+                        author=self.name,
+                        content=types.Content(parts=[types.Part.from_text(f"Input validation failed: {error_message}. Halting workflow.")]),
+                        actions=EventActions(escalate=True)
+                    )
+                    return
+
+                self.logger.info(f"User input successfully validated: {user_input}")
+                ctx.session.state["user_params"] = user_input
+                ctx.session.state["status_user_input"] = "success"
+                yield Event(
+                    author=self.name,
+                    content=types.Content(parts=[types.Part.from_text(f"User input collected and validated: {user_input}")])
+                )
+
+            except Exception as e:
+                self.logger.error(f"Error during user input phase: {e}", exc_info=True)
+                ctx.session.state["status_user_input"] = "error"
+                ctx.session.state["error_message_user_input"] = str(e)
+                yield Event(
+                    author=self.name,
+                    content=types.Content(parts=[types.Part.from_text(f"Error in user input agent: {e}")]),
+                    actions=EventActions(escalate=True) # Escalate on unexpected error
+                )
+
+        elif self.role == "output":
+            final_report = ctx.session.state.get("final_consolidated_report")
+            if final_report:
+                await asyncio.to_thread(self.display_results, final_report)
+                yield Event(
+                    author=self.name,
+                    content=types.Content(parts=[types.Part.from_text("Final results displayed to user.")])
+                )
+            else:
+                error_msg = "Final report not found in session state for display."
+                self.logger.error(error_msg)
+                await asyncio.to_thread(self.display_error, error_msg)
+                yield Event(
+                    author=self.name,
+                    content=types.Content(parts=[types.Part.from_text(error_msg)])
+                )
+        else:
+            # Should not happen due to __init__ validation
+            self.logger.error(f"Unknown role for UserInterfaceAgent: {self.role}")
+            yield Event(
+                author=self.name,
+                content=types.Content(parts=[types.Part.from_text(f"Internal error: Unknown role {self.role}")])
             )
-            self.display_error(error_message)
-            return self._handle_error(error_message)
-
-        self.logger.info(f"User input successfully validated: {user_input}")
-        return {"status": "success", "user_input": user_input}
+        self.logger.info(f"UserInterfaceAgent '{self.name}' (role: {self.role}) finished execution.")
 
     def _get_user_input_interactive(self) -> Optional[Dict[str, str]]:
+        # This method involves blocking I/O (input()), so it's run in a separate thread by asyncio.to_thread
         """
         Interactively prompts the user for necessary inputs.
         Returns a dictionary of inputs or None if the user wishes to abort.

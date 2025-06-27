@@ -1,10 +1,13 @@
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, AsyncGenerator
 import pandas as pd
 import numpy as np
-from .base_agent import Agent
+import asyncio # For potentially long-running CPU-bound tasks if needed
+
+from google.adk.agents import BaseAgent, InvocationContext
+from google.adk.events import Event, EventActions, types
 
 
-class DataQualityValidationAgent(Agent):
+class DataQualityValidationAgent(BaseAgent):
     """
     Assesses data integrity of sensor data and provides recommendations.
     """
@@ -22,38 +25,49 @@ class DataQualityValidationAgent(Agent):
     }
     TIMESTAMP_CONSISTENCY_TOLERANCE_SECONDS = 5
 
-    def __init__(self):
-        super().__init__("DataQualityValidationAgent")
+    def __init__(self, name: str, description: str, **kwargs):
+        super().__init__(name=name, description=description, **kwargs)
+        self.logger.info(f"DataQualityValidationAgent '{self.name}' initialized.")
 
-    def execute(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Args:
-            data (Dict[str, Any]): sensor_data (pd.DataFrame), metadata (optional)
-        """
-        required_keys = ["sensor_data"]
-        if not self._validate_input(data, required_keys=required_keys):
-            return self._handle_error("Missing 'sensor_data' for quality assessment.")
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        self.logger.info(f"'{self.name}' starting data quality assessment.")
 
-        sensor_df = data.get("sensor_data")
+        sensor_df = ctx.session.state.get("sensor_data_df")
+
+        if sensor_df is None:
+            error_msg = "'sensor_data_df' not found in session state."
+            self.logger.error(error_msg)
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
+
         if not isinstance(sensor_df, pd.DataFrame):
-            return self._handle_error("'sensor_data' must be a Pandas DataFrame.")
+            error_msg = "'sensor_data_df' must be a Pandas DataFrame."
+            self.logger.error(error_msg)
+            ctx.session.state["status_dq_validation"] = "error"
+            ctx.session.state["error_message_dq_validation"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
 
         if sensor_df.empty:
-            self.logger.info("Received empty sensor_data. No quality checks needed.")
-            return {
-                "status": "success",
-                "data_quality_report": {"summary": "No data to assess.", "issues": []},
-                "recommendations": [
-                    "Ensure data retrieval process is working if data was expected."
-                ],
-                "validated_data": sensor_df,
-            }
+            self.logger.info("Received empty sensor_data_df. No quality checks needed.")
+            report = {"summary": "No data to assess.", "issues": [], "issues_by_type": {}}
+            recommendations = ["Ensure data retrieval process is working if data was expected."]
+            ctx.session.state["data_quality_report"] = report
+            ctx.session.state["data_quality_recommendations"] = recommendations
+            # validated_data is the same empty df
+            ctx.session.state["validated_sensor_data_df"] = sensor_df
+            ctx.session.state["status_dq_validation"] = "success_no_data"
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text("Data quality: No data to assess.")]))
+            return
 
         expected_cols = ["timestamp", "tag_name", "value"]
         if not all(col in sensor_df.columns for col in expected_cols):
-            return self._handle_error(
-                f"sensor_data missing required columns: {expected_cols}"
-            )
+            error_msg = f"sensor_data_df missing required columns: {expected_cols}"
+            self.logger.error(error_msg)
+            ctx.session.state["status_dq_validation"] = "error"
+            ctx.session.state["error_message_dq_validation"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
 
         try:
             if not pd.api.types.is_datetime64_any_dtype(sensor_df["timestamp"]):
@@ -62,77 +76,85 @@ class DataQualityValidationAgent(Agent):
             # Specific checks later will handle if conversion failed for critical tags
             sensor_df["value"] = pd.to_numeric(sensor_df["value"], errors="coerce")
         except Exception as e:
-            return self._handle_error(
-                "Failed to process 'timestamp' or 'value' columns.", exception=e
+            error_msg = f"Failed to process 'timestamp' or 'value' columns in sensor_data_df: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            ctx.session.state["status_dq_validation"] = "error"
+            ctx.session.state["error_message_dq_validation"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
+            return
+
+        # The core DQ logic can be computationally intensive but is primarily synchronous pandas operations.
+        # If it were extremely long, we might use asyncio.to_thread. For now, direct call.
+        try:
+            processed_sensor_df, report, recommendations = self._perform_dq_checks(sensor_df.copy())
+
+            ctx.session.state["data_quality_report"] = report
+            ctx.session.state["data_quality_recommendations"] = recommendations
+            # Store the processed (sorted, types converted) DataFrame
+            ctx.session.state["validated_sensor_data_df"] = processed_sensor_df
+            ctx.session.state["status_dq_validation"] = "success"
+
+            self.logger.info(f"Data quality assessment completed. Summary: {report.get('summary')}")
+            yield Event(
+                author=self.name,
+                content=types.Content(parts=[types.Part.from_text(f"Data quality assessment complete: {report.get('summary')}")])
             )
+        except Exception as e:
+            error_msg = f"Error during data quality checks execution: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            ctx.session.state["status_dq_validation"] = "error"
+            ctx.session.state["error_message_dq_validation"] = error_msg
+            yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
 
-        sensor_df = sensor_df.sort_values(by=["tag_name", "timestamp"]).reset_index(
-            drop=True
-        )
 
+    def _perform_dq_checks(self, sensor_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any], List[str]]:
+        """
+        Private helper to encapsulate the synchronous DQ check logic.
+        Returns the processed DataFrame, report dictionary, and recommendations list.
+        """
+        sensor_df = sensor_df.sort_values(by=["tag_name", "timestamp"]).reset_index(drop=True)
         all_issues: List[Dict[str, Any]] = []
         all_recommendations: List[str] = []
 
         for tag_name, group_df in sensor_df.groupby("tag_name"):
             self.logger.debug(f"Assessing quality for tag: {tag_name}")
-            group_df = group_df.dropna(
-                subset=["value"]
-            )  # Work with non-NaN values for checks
-            if group_df.empty:
+            group_df_cleaned = group_df.dropna(subset=["value"])
+            if group_df_cleaned.empty:
                 continue
 
-            missing_issues, missing_recs = self._check_missing_data(
-                group_df.copy(), tag_name
-            )
+            missing_issues, missing_recs = self._check_missing_data(group_df_cleaned.copy(), tag_name)
             all_issues.extend(missing_issues)
             all_recommendations.extend(missing_recs)
 
             if "STATUS" in tag_name.upper() and "PUMP" in tag_name.upper():
-                pump_issues, pump_recs = self._check_pump_status_transitions(
-                    group_df.copy(), tag_name
-                )
+                pump_issues, pump_recs = self._check_pump_status_transitions(group_df_cleaned.copy(), tag_name)
                 all_issues.extend(pump_issues)
                 all_recommendations.extend(pump_recs)
 
             if any(ft in tag_name.upper() for ft in ["FLOW", "RATE"]):
-                flow_issues, flow_recs = self._check_unrealistic_flowrates(
-                    group_df.copy(), tag_name
-                )
+                flow_issues, flow_recs = self._check_unrealistic_flowrates(group_df_cleaned.copy(), tag_name)
                 all_issues.extend(flow_issues)
                 all_recommendations.extend(flow_recs)
 
-            ts_issues, ts_recs = self._check_timestamp_consistency(
-                group_df.copy(), tag_name
-            )
+            ts_issues, ts_recs = self._check_timestamp_consistency(group_df_cleaned.copy(), tag_name)
             all_issues.extend(ts_issues)
             all_recommendations.extend(ts_recs)
 
         report = {
             "summary": f"Found {len(all_issues)} potential data quality issues.",
-            "issues_by_type": self._summarize_issues(all_issues),
+            "issues_by_type": self._summarize_issues_by_type(all_issues),
+            "detailed_issues_count": len(all_issues), # Adding this for direct access
             "detailed_issues": all_issues,
         }
 
-        critical_alerts = [
-            issue for issue in all_issues if issue.get("severity") == "critical"
-        ]
+        critical_alerts = [issue for issue in all_issues if issue.get("severity") == "critical"]
         if critical_alerts:
-            all_recommendations.append(
-                "CRITICAL ALERTS generated. Review detailed issues immediately."
-            )
+            all_recommendations.append("CRITICAL ALERTS generated. Review detailed issues immediately.")
 
-        self.logger.info(
-            f"Data quality assessment completed. Found {len(all_issues)} issues."
-        )
-        return {
-            "status": "success",
-            "data_quality_report": report,
-            "recommendations": list(set(all_recommendations)),
-            "validated_data": sensor_df,  # Original df, cleaning is out of scope for now
-        }
+        return sensor_df, report, list(set(all_recommendations))
 
-    def _summarize_issues(self, issues: List[Dict]) -> Dict[str, int]:
-        summary = {}
+    def _summarize_issues_by_type(self, issues: List[Dict]) -> Dict[str, int]:
+        summary_by_type = {}
         for issue in issues:
             issue_type = issue.get("type", "Unknown")
             summary[issue_type] = summary.get(issue_type, 0) + 1

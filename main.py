@@ -1,142 +1,177 @@
-from typing import Dict, Any
-import logging # Ensure logging is available for all modules
-from .base_agent import Agent
-from .user_interface_agent import UserInterfaceAgent
-from .bigquery_data_retrieval_agent import BigQueryDataRetrievalAgent 
-from .data_quality_agent import DataQualityValidationAgent
-from .power_consumption_agent import PowerConsumptionCalculationAgent
-from .statistical_analysis_agent import StatisticalAnalysisAgent
-from .insights_optimization_agent import InsightsOptimizationAgent
+import asyncio
+from typing import Dict, Any, List, AsyncGenerator
+import logging
 
-class RootOrchestratorAgent(Agent):
+# ADK Imports
+from google.adk.agents import SequentialAgent, InvocationContext # BaseAgent removed as it's not directly used here
+from google.adk.events import Event # EventActions removed as it's not directly used here
+from google.adk.runtime import Session
+
+# Local Agent Class Imports (Now ADK BaseAgent subclasses)
+from dra_power_analysis.agents.user_interface_agent import UserInterfaceAgent
+from dra_power_analysis.agents.bigquery_data_retrieval_agent import BigQueryDataRetrievalAgent
+from dra_power_analysis.agents.data_quality_agent import DataQualityValidationAgent
+from dra_power_analysis.agents.power_consumption_agent import PowerConsumptionCalculationAgent
+from dra_power_analysis.agents.statistical_analysis_agent import StatisticalAnalysisAgent
+from dra_power_analysis.agents.insights_optimization_agent import InsightsOptimizationAgent
+
+# Configure basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', force=True)
+logger = logging.getLogger(__name__)
+
+class ADKRootOrchestratorAgent(SequentialAgent):
     """
-    Coordinates all sub-agents and manages the overall workflow execution
-    for power consumption analysis.
+    Orchestrates the power consumption analysis workflow using ADK's SequentialAgent.
     """
 
-    def __init__(self, use_mock_bq: bool = True):
-        super().__init__("RootOrchestratorAgent")
-        self.ui_agent = UserInterfaceAgent()
-        self.bq_retrieval_agent = BigQueryDataRetrievalAgent(use_mock=use_mock_bq)
-        self.dq_agent = DataQualityValidationAgent()
-        self.power_calc_agent = PowerConsumptionCalculationAgent()
-        self.stat_analysis_agent = StatisticalAnalysisAgent()
-        self.insights_agent = InsightsOptimizationAgent()
-        self.logger.info("All sub-agents initialized.")
-
-    def execute(self, data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Runs the full analysis workflow.
-        """
-        self.logger.info("Starting multi-agent power consumption analysis workflow...")
+    def __init__(self, use_mock_bq: bool = True, **kwargs):
         
-        final_report: Dict[str, Any] = {"status": "initiated", "error_message": None}
+        # Instantiate all sub-agents with their names and descriptions
+        # Descriptions are simplified from AGENT.md
+        ui_agent_input = UserInterfaceAgent(
+            name="UserInputAgent",
+            description="Handles user input gathering and validation.",
+            role="input"
+        )
+        bq_retrieval_agent = BigQueryDataRetrievalAgent(
+            name="BigQueryDataRetrievalAgent",
+            description="Executes optimized queries against BigQuery.",
+            use_mock=use_mock_bq
+        )
+        dq_agent = DataQualityValidationAgent(
+            name="DataQualityValidationAgent",
+            description="Assesses data integrity of retrieved sensor data."
+        )
+        power_calc_agent = PowerConsumptionCalculationAgent(
+            name="PowerConsumptionCalculationAgent",
+            description="Converts sensor data to power consumption metrics."
+        )
+        stat_analysis_agent = StatisticalAnalysisAgent(
+            name="StatisticalAnalysisAgent",
+            description="Performs time-series analysis and statistical computations."
+        )
+        insights_agent = InsightsOptimizationAgent(
+            name="InsightsOptimizationAgent",
+            description="Generates actionable recommendations for operations."
+        )
+        ui_agent_output = UserInterfaceAgent(
+            name="UserOutputAgent",
+            description="Handles presentation of final results to the user.",
+            role="output"
+        )
 
-        try:
-            ui_result = self.ui_agent.execute()
-            if ui_result.get("status") == "error":
-                raise Exception(f"User Interface Agent failed: {ui_result.get('error_message')}")
-            user_params = ui_result.get("user_input", {})
-            final_report["user_inputs"] = user_params
-            self.logger.info(f"User input: {user_params}")
+        sub_agents_list = [
+            ui_agent_input,
+            bq_retrieval_agent,
+            dq_agent,
+            power_calc_agent,
+            stat_analysis_agent,
+            insights_agent,
+            ui_agent_output
+        ]
 
-            bq_params = {
-                "location_id": user_params.get("location_id"),
-                "pipeline_line": user_params.get("pipeline_line_number"),
-                "start_date": user_params.get("start_date"),
-                "end_date": user_params.get("end_date"),
-                "aggregation_interval": "raw",
-                "tags_to_retrieve": ["pump_status", "pressure", "flowrate", "dra_injection_rate", "tank_level"]
-            }
-            retrieval_result = self.bq_retrieval_agent.execute(bq_params)
-            if retrieval_result.get("status") == "error":
-                raise Exception(f"BQ Retrieval Agent failed: {retrieval_result.get('error_message')}")
-            sensor_data_df = retrieval_result.get("sensor_data")
-            if sensor_data_df is None or sensor_data_df.empty:
-                raise Exception("No sensor data retrieved. Cannot proceed.")
-            self.logger.info(f"Retrieved {len(sensor_data_df)} sensor records.")
+        super().__init__(
+            name="RootOrchestratorSequentialAgent",
+            description="Orchestrates the entire power consumption analysis pipeline sequentially.",
+            sub_agents=sub_agents_list,
+            **kwargs
+        )
+        self.logger.info(f"'{self.name}' initialized with {len(self.sub_agents)} sub-agents.")
 
-            dq_result = self.dq_agent.execute({"sensor_data": sensor_data_df})
-            if dq_result.get("status") == "error": # Log but don't necessarily stop
-                self.logger.error(f"Data Quality Agent encountered issues: {dq_result.get('error_message')}")
-            final_report["data_quality_assessment"] = dq_result.get("data_quality_report", {})
-            final_report["data_quality_recommendations"] = dq_result.get("recommendations", [])
-            self.logger.info(f"DQ summary: {final_report['data_quality_assessment'].get('summary')}")
+    # The _run_async_impl for SequentialAgent is provided by ADK.
+    # It will execute its sub_agents in order.
 
-            power_calc_result = self.power_calc_agent.execute({"sensor_data": sensor_data_df.copy()})
-            if power_calc_result.get("status") == "error":
-                raise Exception(f"Power Calc Agent failed: {power_calc_result.get('error_message')}")
-            power_consumption_df = power_calc_result.get("power_consumption_data")
-            final_report["power_consumption_summary"] = power_calc_result.get("summary_metrics")
-            if power_consumption_df is None or power_consumption_df.empty:
-                raise Exception("Power consumption could not be calculated.")
-            self.logger.info(f"Power calc summary: {final_report['power_consumption_summary']}")
+async def main_async(use_mock_bq: bool = True):
+    """Asynchronous main function to run the ADK orchestrator."""
+    logger.info("Attempting to run ADK Root Orchestrator Agent workflow...")
 
-            stat_input = {"power_consumption_data": power_consumption_df.copy()}
-            stat_analysis_result = self.stat_analysis_agent.execute(stat_input)
-            if stat_analysis_result.get("status") == "error": # Log but don't necessarily stop
-                 self.logger.error(f"Stats Agent failed: {stat_analysis_result.get('error_message')}")
-            final_report["statistical_analysis_highlights"] = stat_analysis_result.get("statistical_summary", {})
-            # Store data needed for visualization hints if UI agent were to use them directly
-            final_report["visualization_data_store"] = {
-                "time_series_aggregations": stat_analysis_result.get("time_series_aggregations", {}),
-                "correlation_analysis": stat_analysis_result.get("correlation_analysis", {}),
-                "efficiency_trends": stat_analysis_result.get("efficiency_trends", {})
-            }
-            final_report["visualization_hints"] = stat_analysis_result.get("visualization_hints", [])
-            self.logger.info(f"Stats analysis generated for {len(final_report['statistical_analysis_highlights'])} groups.")
+    orchestrator = ADKRootOrchestratorAgent(use_mock_bq=use_mock_bq)
 
-            insights_input = {
-                "statistical_summary": final_report["statistical_analysis_highlights"],
-                "efficiency_trends": stat_analysis_result.get("efficiency_trends", {}), # Pass the actual data, not just summary
-                "data_quality_report": final_report["data_quality_assessment"],
-            }
-            insights_result = self.insights_agent.execute(insights_input)
-            if insights_result.get("status") == "error": # Log but don't necessarily stop
-                self.logger.error(f"Insights Agent failed: {insights_result.get('error_message')}")
-            final_report["optimization_roadmap"] = {"opportunities": insights_result.get("optimization_opportunities", [])}
-            final_report["executive_summary_points"] = insights_result.get("executive_summary_points", [])
-            final_report["risk_assessment_notes"] = insights_result.get("risk_assessment_notes", [])
-            self.logger.info(f"Insights generated {len(final_report['optimization_roadmap']['opportunities'])} opportunities.")
+    # Initial state could include global configurations if needed by multiple agents,
+    # but in this flow, the first agent (UserInputAgent) populates the necessary initial state.
+    session = Session(state={})
 
-            # Consolidate executive summary
-            exec_summary_str = "Executive Summary:\n"
-            if not final_report["executive_summary_points"]:
-                exec_summary_str += "- Analysis complete. No specific high-priority points generated. Review detailed sections."
+    final_workflow_result = {}
+    workflow_error = None
 
-            for point in final_report["executive_summary_points"]:
-                exec_summary_str += f"- {point}\n"
-            if final_report.get("power_consumption_summary"):
-                pcs = final_report["power_consumption_summary"]
-                exec_summary_str += f"- Approx total energy: {pcs.get('total_electrical_energy_kwh_approx','N/A')} kWh. Avg power: {pcs.get('average_electrical_power_kw','N/A')} kW.
-"
-            final_report["executive_summary"] = exec_summary_str
-            final_report["status"] = "success"
+    try:
+        # The 'request' to a SequentialAgent can be a simple trigger string or empty
+        # if the flow doesn't depend on an initial LLM interpretation by the orchestrator itself.
+        # Here, the UserInputAgent handles the initial interaction.
+        async for event in orchestrator.run(request="Start power consumption analysis pipeline", session=session):
+            logger.info(f"Event from '{event.author}': {event.content.parts[0].text if event.content and event.content.parts else 'Event has no textual content.'}")
+            if event.actions and event.actions.escalate:
+                logger.error(f"Workflow escalation by '{event.author}'. Halting.")
+                workflow_error = f"Escalation by {event.author}: {event.content.parts[0].text if event.content and event.content.parts else 'No specific error message.'}"
+                break
 
-        except Exception as e:
-            self.logger.critical(f"Workflow terminated with error: {e}", exc_info=True)
-            final_report["status"] = "error"
-            final_report["error_message"] = str(e)
-        
-        self.logger.info(f"Workflow finished with status: {final_report['status']}")
-        self.ui_agent.display_results(final_report) # Display final consolidated report or error
-        return final_report
+        if workflow_error:
+            final_workflow_result = session.state
+            final_workflow_result["status"] = "error"
+            # Attempt to pull a more specific error if set by an agent
+            final_workflow_result["error_message"] = workflow_error
+            # If the UI output agent ran before escalation, it might have already printed.
+            # If escalation happened before UI output, we might want to print the error here.
+            # Check if final_consolidated_report exists and has an error status
+            consolidated_report = session.state.get("final_consolidated_report", {})
+            if consolidated_report.get("status") == "error" and "error_message" in consolidated_report:
+                 final_workflow_result["error_message"] = consolidated_report["error_message"]
+            elif "error_message_user_input" in session.state: # Check for early UI error
+                 final_workflow_result["error_message"] = session.state["error_message_user_input"]
+
+
+        else:
+            final_workflow_result = session.state.get("final_consolidated_report", session.state)
+            # Ensure status is success if no error/escalation occurred and report exists
+            if "status" not in final_workflow_result or final_workflow_result.get("status") != "error":
+                final_workflow_result["status"] = "success"
+
+
+    except Exception as e:
+        logger.critical(f"Critical error during ADK orchestrator execution: {e}", exc_info=True)
+        final_workflow_result = session.state # Get whatever state existed
+        final_workflow_result["status"] = "error"
+        final_workflow_result["error_message"] = f"Orchestrator critical error: {str(e)}"
+
+    # Final outcome logging
+    if final_workflow_result.get("status") == "success":
+        logger.info("\n--- ADK Orchestrator: Workflow COMPLETED SUCCESSFULLY ---")
+        # Results are displayed by the UserOutputAgent if the workflow reached it.
+    else:
+        logger.error(f"\n--- ADK Orchestrator: Workflow FAILED or HALTED ---")
+        logger.error(f"Error: {final_workflow_result.get('error_message', 'Unknown error or early halt.')}")
+        # If the UserOutputAgent didn't run or if it's an orchestrator level error,
+        # we might need to explicitly print the error details if not already handled.
+        # The UserOutputAgent is designed to display final_consolidated_report which includes error status.
 
 if __name__ == '__main__':
     # To run the orchestrator:
-    # python -m dra_power_analysis.agents.root_orchestrator_agent
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', force=True)
-    orchestrator = RootOrchestratorAgent(use_mock_bq=True)
+    # python -m main
+    # (if main.py is in the root of a package 'dra_power_analysis',
+    #  you might run `python -m dra_power_analysis.main` from one level up,
+    #  or adjust PYTHONPATH if running main.py directly from its directory)
     
-    print("Attempting to run Root Orchestrator Agent workflow...")
-    print("If non-interactive, UI agent might default or fail input.")
-    print("Mock Inputs: Location: STN_A001, Pipeline: PL123, Dates: 2023-01-01 to 2023-01-01")
+    # For simplicity, assuming main.py can be run directly due to relative imports of agents.
+    # If running as `python main.py` from `dra_power_analysis/agents/` context, imports might need adjustment.
+    # The current structure with `from dra_power_analysis.agents...` implies `main.py` is outside `agents` dir,
+    # or `dra_power_analysis` is in PYTHONPATH.
 
-    final_workflow_result = orchestrator.execute()
+    # We'll assume `python main.py` is run from the directory containing `dra_power_analysis` package.
+    # If `main.py` is inside `dra_power_analysis` and is the main entry point:
+    # One way to handle imports if main.py is inside dra_power_analysis:
+    # Add project root to sys.path if needed, or use `python -m dra_power_analysis.main`
 
-    # Summary already printed by ui_agent.display_results() via orchestrator
-    if final_workflow_result.get("status") == "success":
-        print("\n--- Orchestrator Test: Workflow COMPLETED SUCCESSFULLY (mock run) ---")
-    else:
-        print("\n--- Orchestrator Test: Workflow FAILED (mock run) ---")
-        # Error details would have been printed by ui_agent or logged.
+    # The current setup implies main.py is at the root, alongside the dra_power_analysis directory.
+    # Example:
+    # project_root/
+    #  main.py
+    #  dra_power_analysis/
+    #    __init__.py
+    #    agents/
+    #      __init__.py
+    #      user_interface_agent.py
+    #      ...
+    # In this case, `from dra_power_analysis.agents...` should work when running `python main.py` from `project_root`.
+
+    asyncio.run(main_async(use_mock_bq=True)) # Set use_mock_bq as needed
+    logger.info("ADK Workflow execution finished.")
