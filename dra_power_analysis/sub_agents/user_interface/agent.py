@@ -1,8 +1,10 @@
 import datetime
-from typing import Dict, Any, Optional, Tuple, AsyncGenerator
+from typing import Dict, Any, Optional, Tuple, AsyncGenerator, ClassVar
+import asyncio
 
-from google.adk.agents import BaseAgent, InvocationContext
-from google.adk.events import Event, EventActions, types
+from google.adk.agents import BaseAgent
+from google.adk.events import Event, EventActions
+from google.genai import types
 
 
 class UserInterfaceAgent(BaseAgent):
@@ -12,10 +14,10 @@ class UserInterfaceAgent(BaseAgent):
     """
 
     # Configuration for validation
-    VALID_LOCATIONS = ["STN_A001", "STN_B002", "STN_C003"]
-    PIPELINE_LINE_NUMBER_FORMAT_PREFIX = "PL"
-    MAX_DATE_RANGE_DAYS = 365
-    MAX_PAST_DAYS_DATA_RETENTION = 5 * 365
+    VALID_LOCATIONS: ClassVar[list] = ["STN_A001", "STN_B002", "STN_C003"]
+    PIPELINE_LINE_NUMBER_FORMAT_PREFIX: ClassVar[str] = "PL"
+    MAX_DATE_RANGE_DAYS: ClassVar[int] = 365
+    MAX_PAST_DAYS_DATA_RETENTION: ClassVar[int] = 5 * 365
 
     def __init__(self, name: str, description: str, role: str = "input", **kwargs):
         super().__init__(name=name, description=description, **kwargs)
@@ -24,7 +26,7 @@ class UserInterfaceAgent(BaseAgent):
         self.role = role
         self.logger.info(f"UserInterfaceAgent '{self.name}' initialized with role: {self.role}.")
 
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+    async def _run_async_impl(self, ctx) -> AsyncGenerator[Event, None]:
         self.logger.info(f"UserInterfaceAgent '{self.name}' (role: {self.role}) starting execution.")
 
         if self.role == "input":
@@ -441,3 +443,8 @@ if __name__ == "__main__":
     print(
         "\nTo test interactive input, uncomment the `ui_agent.execute()` call in the main block and run the script."
     )
+
+ui_agent_output = UserInterfaceAgent( # Or UserOutputAgent
+    name="UserInterfaceAgent",
+    description="Handles presentation of final results to the user."
+)

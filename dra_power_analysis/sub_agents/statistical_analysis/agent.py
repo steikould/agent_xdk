@@ -1,10 +1,11 @@
-from typing import Dict, Any, List, Tuple, Optional, AsyncGenerator
+from typing import Dict, Any, List, Tuple, Optional, AsyncGenerator, ClassVar
 import pandas as pd
 import numpy as np
 import asyncio # For potentially long-running CPU-bound tasks
 
-from google.adk.agents import BaseAgent, InvocationContext
-from google.adk.events import Event, EventActions, types
+from google.adk.agents import BaseAgent
+from google.adk.events import Event, EventActions
+from google.genai import types
 
 # For more advanced stats, might need: from scipy import stats
 
@@ -18,7 +19,7 @@ class StatisticalAnalysisAgent(BaseAgent):
         super().__init__(name=name, description=description, **kwargs)
         self.logger.info(f"StatisticalAnalysisAgent '{self.name}' initialized.")
 
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+    async def _run_async_impl(self, ctx) -> AsyncGenerator[Event, None]:
         self.logger.info(f"'{self.name}' starting statistical analysis.")
 
         power_df = ctx.session.state.get("power_consumption_data")
@@ -263,3 +264,8 @@ if __name__ == "__main__":
         print(f"Statistical analysis failed: {result['error_message']}")
 
     print("\nStatisticalAnalysisAgent tests completed.")
+
+stat_analysis_agent = StatisticalAnalysisAgent(
+    name="StatisticalAnalysisAgent",
+    description="Performs time-series analysis and statistical computations."
+)

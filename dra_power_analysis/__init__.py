@@ -9,5 +9,6 @@
 # e.g., from dra_power_analysis.agents.root_orchestrator_agent import RootOrchestratorAgent
 # or run using `python -m dra_power_analysis.main`
 
-__version__ = "0.1.0"
-APP_NAME = "DRA Power Analysis System"
+# __version__ = "0.1.0"
+# APP_NAME = "DRA Power Analysis System"
+# from . import agent

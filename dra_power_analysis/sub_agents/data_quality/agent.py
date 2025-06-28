@@ -1,10 +1,11 @@
-from typing import Dict, Any, List, Tuple, AsyncGenerator
+from typing import Dict, Any, List, Tuple, AsyncGenerator, ClassVar
 import pandas as pd
 import numpy as np
 import asyncio # For potentially long-running CPU-bound tasks if needed
 
-from google.adk.agents import BaseAgent, InvocationContext
-from google.adk.events import Event, EventActions, types
+from google.adk.agents import BaseAgent
+from google.adk.events import Event, EventActions
+from google.genai import types
 
 
 class DataQualityValidationAgent(BaseAgent):
@@ -12,24 +13,24 @@ class DataQualityValidationAgent(BaseAgent):
     Assesses data integrity of sensor data and provides recommendations.
     """
 
-    MAX_CONSECUTIVE_MISSING_THRESHOLD_MULTIPLIER = 3  # Times median interval
-    PUMP_STATUS_MIN_CYCLE_DURATION_SECONDS = 60
-    FLOWRATE_REALISTIC_MIN = 0.0
-    FLOWRATE_REALISTIC_MAX_FACTOR = 2.5  # Max flowrate can be X times its typical max
-    TYPICAL_MAX_FLOWRATES = {
+    MAX_CONSECUTIVE_MISSING_THRESHOLD_MULTIPLIER: ClassVar[int] = 3  # Times median interval
+    PUMP_STATUS_MIN_CYCLE_DURATION_SECONDS: ClassVar[float] = 60
+    FLOWRATE_REALISTIC_MIN: ClassVar[float] = 0.0
+    FLOWRATE_REALISTIC_MAX_FACTOR: ClassVar[float] = 2.5  # Max flowrate can be X times its typical max
+    TYPICAL_MAX_FLOWRATES: ClassVar[dict] = {
         "UPSTREAM_FLOW": 500,
         "DOWNSTREAM_FLOW": 500,
         "PUMP_A_FLOW_RATE_M3S": 0.05,
         "PUMP_B_FLOW_RATE_M3S": 0.04,
         "DRA_RATE_PUMP_A": 20,
     }
-    TIMESTAMP_CONSISTENCY_TOLERANCE_SECONDS = 5
+    TIMESTAMP_CONSISTENCY_TOLERANCE_SECONDS: ClassVar[float] = 5
 
     def __init__(self, name: str, description: str, **kwargs):
         super().__init__(name=name, description=description, **kwargs)
         self.logger.info(f"DataQualityValidationAgent '{self.name}' initialized.")
 
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+    async def _run_async_impl(self, ctx) -> AsyncGenerator[Event, None]:
         self.logger.info(f"'{self.name}' starting data quality assessment.")
 
         sensor_df = ctx.session.state.get("sensor_data_df")
@@ -157,8 +158,8 @@ class DataQualityValidationAgent(BaseAgent):
         summary_by_type = {}
         for issue in issues:
             issue_type = issue.get("type", "Unknown")
-            summary[issue_type] = summary.get(issue_type, 0) + 1
-        return summary
+            summary_by_type[issue_type] = summary_by_type.get(issue_type, 0) + 1
+        return summary_by_type
 
     def _check_missing_data(
         self, df: pd.DataFrame, tag_name: str
@@ -426,3 +427,8 @@ if __name__ == "__main__":
         )
 
     print("\nDataQualityValidationAgent tests completed.")
+
+dq_agent = DataQualityValidationAgent(
+    name="DataQualityValidationAgent",
+    description="Assesses data integrity of retrieved sensor data."
+)
