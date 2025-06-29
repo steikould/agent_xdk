@@ -1,26 +1,26 @@
-from typing import Dict, Any, List, AsyncGenerator, Tuple
+from typing import Dict, Any, List, AsyncGenerator, Tuple, ClassVar
 import pandas as pd
 import numpy as np
 import asyncio # For potentially long-running CPU-bound tasks
-
-from google.adk.agents import BaseAgent, InvocationContext
-from google.adk.events import Event, EventActions, types
-
+from google.adk.agents import BaseAgent
+from google.adk.events import Event, EventActions
+from google.genai import types
+\
 
 class InsightsOptimizationAgent(BaseAgent):
     """
     Generates actionable recommendations for operations based on analysis results.
     """
 
-    EFFICIENCY_DEGRADATION_THRESHOLD = 0.05  # 5% drop from baseline/average
-    HIGH_POWER_CONSUMPTION_FACTOR = 2.0  # Max power > X times median power
-    LOW_EFFICIENCY_ABSOLUTE_THRESHOLD = 0.60
+    EFFICIENCY_DEGRADATION_THRESHOLD: ClassVar[float] = 0.05  # 5% drop from baseline/average
+    HIGH_POWER_CONSUMPTION_FACTOR: ClassVar[float] = 2.0  # Max power > X times median power
+    LOW_EFFICIENCY_ABSOLUTE_THRESHOLD: ClassVar[float] = 0.60
 
     def __init__(self, name: str, description: str, **kwargs):
         super().__init__(name=name, description=description, **kwargs)
         self.logger.info(f"InsightsOptimizationAgent '{self.name}' initialized.")
 
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+    async def _run_async_impl(self, ctx) -> AsyncGenerator[Event, None]:
         self.logger.info(f"'{self.name}' starting insights and optimization generation.")
 
         stats_summary = ctx.session.state.get("statistical_summary")
@@ -30,8 +30,6 @@ class InsightsOptimizationAgent(BaseAgent):
         if stats_summary is None or efficiency_trends_data is None:
             error_msg = "Missing 'statistical_summary' or 'efficiency_trends' in session state."
             self.logger.error(error_msg)
-            # Potentially non-escalating if some insights can be generated without all data
-            # However, for this agent, these are fairly critical.
             yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text(error_msg)]), actions=EventActions(escalate=True))
             return
 
@@ -165,67 +163,76 @@ if __name__ == "__main__":
     import logging
     import asyncio
 
-    async def test_insights_agent():
+    async def test_insights_agent(): # <--- This is the start of your async test function
         logging.basicConfig(level=logging.DEBUG)
         agent_description = "Test Insights Agent - Generates actionable recommendations."
         insights_agent = InsightsOptimizationAgent(name="TestInsightsAgent", description=agent_description)
 
-    pump_a_eff_data = pd.DataFrame(
-        {
-            "timestamp": pd.to_datetime(["2023-01-01", "2023-01-03"]),
-            "calculated_pump_efficiency": [0.75, 0.68],
+        # All of the following lines MUST be indented to be inside test_insights_agent()
+        pump_a_eff_data = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2023-01-01", "2023-01-03"]),
+                "calculated_pump_efficiency": [0.75, 0.68],
+            }
+        )
+        pump_b_eff_data = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(["2023-01-01", "2023-01-03"]),
+                "calculated_pump_efficiency": [0.58, 0.52],
+            }
+        )
+
+        sample_input = {
+            "statistical_summary": {
+                "PUMP_A": {"mean": 100, "median": 95, "max": 180},
+                "PUMP_B": {"mean": 120, "median": 110, "max": 300},
+                "SystemTotal": {"mean": 220, "median": 205, "max": 480},
+            },
+            "efficiency_trends": {"PUMP_A": pump_a_eff_data, "PUMP_B": pump_b_eff_data},
+            "data_quality_report": {
+                "detailed_issues": [{"tag_name": "PUMP_B_SENSOR", "severity": "critical"}]
+            },
         }
-    )
-    pump_b_eff_data = pd.DataFrame(
-        {
-            "timestamp": pd.to_datetime(["2023-01-01", "2023-01-03"]),
-            "calculated_pump_efficiency": [0.58, 0.52],
+
+        # Mock InvocationContext and Session
+        mock_session_state = {
+            "statistical_summary": sample_input["statistical_summary"],
+            "efficiency_trends": sample_input["efficiency_trends"],
+            "data_quality_report": sample_input["data_quality_report"],
+            # Add other data that might be used for the final consolidated report
+            "user_params": {"location_id": "TestLoc", "pipeline_line_number": "TestPipe", "start_date": "2023-01-01", "end_date": "2023-01-03"},
+            "data_quality_recommendations": ["Review sensor X"],
+            "power_summary_metrics": {"total_electrical_energy_kwh_approx": 1000, "average_electrical_power_kw": 50},
+            "time_series_aggregations": {}, "correlation_analysis": {}, "visualization_hints": []
         }
-    )
+        mock_session = type('Session', (), {'state': mock_session_state})()
+        mock_ctx = type('InvocationContext', (), {'session': mock_session})()
 
-    sample_input = {
-        "statistical_summary": {
-            "PUMP_A": {"mean": 100, "median": 95, "max": 180},
-            "PUMP_B": {"mean": 120, "median": 110, "max": 300},
-            "SystemTotal": {"mean": 220, "median": 205, "max": 480},
-        },
-        "efficiency_trends": {"PUMP_A": pump_a_eff_data, "PUMP_B": pump_b_eff_data},
-        "data_quality_report": {
-            "detailed_issues": [{"tag_name": "PUMP_B_SENSOR", "severity": "critical"}]
-        },
-    }
+        print("\n--- Test Case: Generating Insights (ADK Agent) ---")
+        
+        # This async for loop and subsequent code must also be indented
+        async for event in insights_agent._run_async_impl(mock_ctx):
+            print(f"Event from {event.author}: {event.content.parts[0].text if event.content and event.content.parts else 'No event content'}")
 
-    # Mock InvocationContext and Session
-    mock_session_state = {
-        "statistical_summary": sample_input["statistical_summary"],
-        "efficiency_trends": sample_input["efficiency_trends"],
-        "data_quality_report": sample_input["data_quality_report"],
-        # Add other data that might be used for the final consolidated report
-        "user_params": {"location_id": "TestLoc", "pipeline_line_number": "TestPipe", "start_date": "2023-01-01", "end_date": "2023-01-03"},
-        "data_quality_recommendations": ["Review sensor X"],
-        "power_summary_metrics": {"total_electrical_energy_kwh_approx": 1000, "average_electrical_power_kw": 50},
-        "time_series_aggregations": {}, "correlation_analysis": {}, "visualization_hints": []
-    }
-    mock_session = type('Session', (), {'state': mock_session_state})()
-    mock_ctx = type('InvocationContext', (), {'session': mock_session})()
+        if mock_ctx.session.state.get("status_insights") == "success":
+            opportunities = mock_ctx.session.state.get("optimization_opportunities", [])
+            # print("Executive Summary Points:", mock_ctx.session.state.get("executive_summary_points"))
+            # print("Optimization Opportunities:", opportunities)
+            # print("Final Consolidated Report:", mock_ctx.session.state.get("final_consolidated_report"))
+            assert len(opportunities) > 0
+            assert any("PUMP_A" in opp.get("description", "") and "Degradation" in opp.get("type", "") for opp in opportunities)
+            assert any("PUMP_B" in opp.get("description", "") and "Low Efficiency Operation" in opp.get("type", "") for opp in opportunities)
+            assert mock_ctx.session.state.get("final_consolidated_report") is not None
+            assert "Executive Summary:" in mock_ctx.session.state.get("final_consolidated_report", {}).get("executive_summary","")
+        else:
+            print(f"Insights generation failed: {mock_ctx.session.state.get('error_message_insights')}")
 
-    print("\n--- Test Case: Generating Insights (ADK Agent) ---")
-    async for event in insights_agent._run_async_impl(mock_ctx):
-        print(f"Event from {event.author}: {event.content.parts[0].text if event.content and event.content.parts else 'No event content'}")
+        print("\nInsightsOptimizationAgent ADK tests completed.")
 
-    if mock_ctx.session.state.get("status_insights") == "success":
-        opportunities = mock_ctx.session.state.get("optimization_opportunities", [])
-        # print("Executive Summary Points:", mock_ctx.session.state.get("executive_summary_points"))
-        # print("Optimization Opportunities:", opportunities)
-        # print("Final Consolidated Report:", mock_ctx.session.state.get("final_consolidated_report"))
-        assert len(opportunities) > 0
-        assert any("PUMP_A" in opp.get("description", "") and "Degradation" in opp.get("type", "") for opp in opportunities)
-        assert any("PUMP_B" in opp.get("description", "") and "Low Efficiency Operation" in opp.get("type", "") for opp in opportunities)
-        assert mock_ctx.session.state.get("final_consolidated_report") is not None
-        assert "Executive Summary:" in mock_ctx.session.state.get("final_consolidated_report", {}).get("executive_summary","")
-    else:
-        print(f"Insights generation failed: {mock_ctx.session.state.get('error_message_insights')}")
-
-    print("\nInsightsOptimizationAgent ADK tests completed.")
-
+    # This line remains outside, as it calls the async function
     asyncio.run(test_insights_agent())
+
+insights_agent = InsightsOptimizationAgent(
+    name="InsightsOptimizationAgent",
+    description="Generates actionable recommendations for operations."
+)

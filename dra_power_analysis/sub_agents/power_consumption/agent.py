@@ -1,10 +1,11 @@
-from typing import Dict, Any, Optional, AsyncGenerator
+from typing import Dict, Any, Optional, Tuple, AsyncGenerator, ClassVar
 import pandas as pd
 import numpy as np
 import asyncio # For potentially long-running CPU-bound tasks
 
-from google.adk.agents import BaseAgent, InvocationContext
-from google.adk.events import Event, EventActions, types
+from google.adk.agents import BaseAgent
+from google.adk.events import Event, EventActions
+from google.genai import types
 
 
 class PowerConsumptionCalculationAgent(BaseAgent):
@@ -13,28 +14,34 @@ class PowerConsumptionCalculationAgent(BaseAgent):
     and lookup tables for efficiencies.
     """
 
-    DEFAULT_MOTOR_EFFICIENCY = 0.90
-    DEFAULT_PUMP_EFFICIENCY = 0.75
-    FLUID_DENSITY_KG_M3 = 900
-    GRAVITY_ACCEL_M_S2 = 9.81
+    DEFAULT_MOTOR_EFFICIENCY: ClassVar[float] = 0.90
+    DEFAULT_PUMP_EFFICIENCY: ClassVar[float] = 0.75
+    FLUID_DENSITY_KG_M3: ClassVar[float] = 900
+    GRAVITY_ACCEL_M_S2: ClassVar[float] = 9.81
 
-    PUMP_SPECIFIC_DATA = {
+    PUMP_SPECIFIC_DATA: ClassVar[dict] = {
         "PUMP_A": {
             "motor_efficiency": 0.92,
             "pump_hydraulic_efficiency": 0.78,
             "vsd_efficiency": 0.95,
         },
-        "PUMP_B": {
+        "PUMP_B": { # Assuming PUMP_B is also a defined pump for which data might exist
             "motor_efficiency": 0.88,
             "pump_hydraulic_efficiency": 0.70,
+            "vsd_efficiency": 0.90, # Added a VSD efficiency for PUMP_B for completeness
         },
+        # You can add more specific pump configurations here if needed
+        # "STN01_LINE01_PUMP_C": { # Example if you wanted to define specs for inferred names
+        #     "motor_efficiency": 0.85,
+        #     "pump_hydraulic_efficiency": 0.68,
+        # }
     }
 
     def __init__(self, name: str, description: str, **kwargs):
         super().__init__(name=name, description=description, **kwargs)
         self.logger.info(f"PowerConsumptionCalculationAgent '{self.name}' initialized.")
 
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+    async def _run_async_impl(self, ctx) -> AsyncGenerator[Event, None]:
         self.logger.info(f"'{self.name}' starting power consumption calculation.")
 
         # Input is expected to be 'validated_sensor_data_df' from DataQualityAgent
@@ -93,13 +100,13 @@ class PowerConsumptionCalculationAgent(BaseAgent):
             final_power_df, summary = self._perform_power_calculations(sensor_df.copy())
 
             if final_power_df.empty and not summary.get("total_pumps_calculated_for", 0) > 0 :
-                 self.logger.warning("No pump data could be processed for power calculation.")
-                 # Yield a non-escalating event, but downstream agents should check for empty results
-                 ctx.session.state["power_consumption_data"] = pd.DataFrame()
-                 ctx.session.state["power_summary_metrics"] = {"status": "no_pumps_processed", "message": "No pumps met criteria for power calculation."}
-                 ctx.session.state["status_power_calc"] = "success_no_pumps_processed"
-                 yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text("Power calculation: No pumps processed.")]))
-                 return
+                self.logger.warning("No pump data could be processed for power calculation.")
+                # Yield a non-escalating event, but downstream agents should check for empty results
+                ctx.session.state["power_consumption_data"] = pd.DataFrame()
+                ctx.session.state["power_summary_metrics"] = {"status": "no_pumps_processed", "message": "No pumps met criteria for power calculation."}
+                ctx.session.state["status_power_calc"] = "success_no_pumps_processed"
+                yield Event(author=self.name, content=types.Content(parts=[types.Part.from_text("Power calculation: No pumps processed.")]))
+                return
 
             ctx.session.state["power_consumption_data"] = final_power_df
             ctx.session.state["power_summary_metrics"] = summary
@@ -150,10 +157,11 @@ class PowerConsumptionCalculationAgent(BaseAgent):
             # A more specific inference might look for a pattern like `PREFIX_PUMPNAME_SUFFIX`
             # For now, this is a simple inference.
             if inferred_pump_names:
-                identified_pumps_for_processing.extend(inferred_pump_names)
-                identified_pumps_for_processing = list(
-                    set(identified_pumps_for_processing)
-                )  # unique
+                # Deduplicate and extend list of pumps to process if new ones were inferred
+                for inferred_name in inferred_pump_names:
+                    if inferred_name not in identified_pumps_for_processing:
+                        identified_pumps_for_processing.append(inferred_name)
+                # identified_pumps_for_processing = list(set(identified_pumps_for_processing)) # No need if appending only unique
 
             if not identified_pumps_for_processing:
                 self.logger.warning("No pump status tags found to identify any pumps (configured or inferred).")
@@ -341,93 +349,99 @@ class PowerConsumptionCalculationAgent(BaseAgent):
 
 if __name__ == "__main__":
     import logging
-    import asyncio
+    import asyncio # Redundant here, but harmless as it's already at the top
 
-    async def test_pc_agent():
+    async def test_pc_agent(): # <--- Corrected function definition
         logging.basicConfig(level=logging.DEBUG)
         agent_description = "Test PC Agent - Calculates power consumption metrics."
         pc_agent = PowerConsumptionCalculationAgent(name="TestPCAgent", description=agent_description)
 
-    ts = [
-        pd.Timestamp("2023-01-01 10:00:00") + pd.Timedelta(minutes=i) for i in range(3)
-    ]
-    mock_sensor_data_list = []
-    # PUMP_A data (matches PUMP_SPECIFIC_DATA)
-    # Using more descriptive tag names as the mock BQ agent might produce
-    pump_a_id = "PUMP_A"
-    for t_idx, t_val in enumerate(ts):
-        mock_sensor_data_list.extend(
-            [
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_a_id}_STATUS",
-                    "value": 1 if t_idx < 2 else 0,
-                },
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_a_id}_UPSTREAM_PRESSURE_PA",
-                    "value": 100000 + t_idx * 1000,
-                },
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_a_id}_DOWNSTREAM_PRESSURE_PA",
-                    "value": 500000 + t_idx * 2000,
-                },
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_a_id}_FLOW_RATE_M3S",
-                    "value": 0.02 + t_idx * 0.001,
-                },
-            ]
-        )
-    # PUMP_C data (will use default efficiencies as PUMP_C is not in PUMP_SPECIFIC_DATA by default)
-    pump_c_id = "PUMP_C"  # This pump is not in PUMP_SPECIFIC_DATA, so should use defaults if inferred
-    for t_idx, t_val in enumerate(ts):
-        mock_sensor_data_list.extend(
-            [
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_c_id}_STATUS",
-                    "value": 1,
-                },
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_c_id}_UPSTREAM_PRESSURE_PA",
-                    "value": 90000,
-                },
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_c_id}_DOWNSTREAM_PRESSURE_PA",
-                    "value": 400000,
-                },
-                {
-                    "timestamp": t_val,
-                    "tag_name": f"STN01_LINE01_{pump_c_id}_FLOW_RATE_M3S",
-                    "value": 0.018,
-                },
-            ]
-        )
-    mock_sensor_df = pd.DataFrame(mock_sensor_data_list)
+        # ALL OF THE FOLLOWING TEST SETUP CODE MUST BE INDENTED HERE
+        ts = [
+            pd.Timestamp("2023-01-01 10:00:00") + pd.Timedelta(minutes=i) for i in range(3)
+        ]
+        mock_sensor_data_list = []
+        # PUMP_A data (matches PUMP_SPECIFIC_DATA)
+        # Using more descriptive tag names as the mock BQ agent might produce
+        pump_a_id = "PUMP_A"
+        for t_idx, t_val in enumerate(ts):
+            mock_sensor_data_list.extend(
+                [
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_a_id}_STATUS",
+                        "value": 1 if t_idx < 2 else 0,
+                    },
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_a_id}_UPSTREAM_PRESSURE_PA",
+                        "value": 100000 + t_idx * 1000,
+                    },
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_a_id}_DOWNSTREAM_PRESSURE_PA",
+                        "value": 500000 + t_idx * 2000,
+                    },
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_a_id}_FLOW_RATE_M3S",
+                        "value": 0.02 + t_idx * 0.001,
+                    },
+                ]
+            )
+        # PUMP_C data (will use default efficiencies as PUMP_C is not in PUMP_SPECIFIC_DATA by default)
+        pump_c_id = "PUMP_C"  # This pump is not in PUMP_SPECIFIC_DATA, so should use defaults if inferred
+        for t_idx, t_val in enumerate(ts):
+            mock_sensor_data_list.extend(
+                [
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_c_id}_STATUS",
+                        "value": 1,
+                    },
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_c_id}_UPSTREAM_PRESSURE_PA",
+                        "value": 90000,
+                    },
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_c_id}_DOWNSTREAM_PRESSURE_PA",
+                        "value": 400000,
+                    },
+                    {
+                        "timestamp": t_val,
+                        "tag_name": f"STN01_LINE01_{pump_c_id}_FLOW_RATE_M3S",
+                        "value": 0.018,
+                    },
+                ]
+            )
+        mock_sensor_df = pd.DataFrame(mock_sensor_data_list)
 
-    # Mock InvocationContext and Session
-    mock_session_state = {"validated_sensor_data_df": mock_sensor_df.copy()}
-    mock_session = type('Session', (), {'state': mock_session_state})()
-    mock_ctx = type('InvocationContext', (), {'session': mock_session})()
+        # Mock InvocationContext and Session
+        mock_session_state = {"validated_sensor_data_df": mock_sensor_df.copy()}
+        mock_session = type('Session', (), {'state': mock_session_state})()
+        mock_ctx = type('InvocationContext', (), {'session': mock_session})()
 
-    print("\n--- Test Case: Valid Sensor Data (ADK Agent) ---")
-    async for event in pc_agent._run_async_impl(mock_ctx):
-        print(f"Event from {event.author}: {event.content.parts[0].text if event.content and event.content.parts else 'No event content'}")
+        print("\n--- Test Case: Valid Sensor Data (ADK Agent) ---")
+        async for event in pc_agent._run_async_impl(mock_ctx):
+            print(f"Event from {event.author}: {event.content.parts[0].text if event.content and event.content.parts else 'No event content'}")
 
-    if mock_ctx.session.state.get("status_power_calc") == "success":
-        power_df = mock_ctx.session.state.get("power_consumption_data")
-        summary = mock_ctx.session.state.get("power_summary_metrics")
-        print("Summary Metrics:", summary)
-        assert "PUMP_A" in power_df["pump_name"].unique()
-        assert "STN01_LINE01_PUMP_C" in power_df["pump_name"].unique() # Inferred name
-        # Further assertions can be added based on expected calculation results
-    else:
-        print(f"Power calculation failed: {mock_ctx.session.state.get('error_message_power_calc')}")
+        if mock_ctx.session.state.get("status_power_calc") == "success":
+            power_df = mock_ctx.session.state.get("power_consumption_data")
+            summary = mock_ctx.session.state.get("power_summary_metrics")
+            print("Summary Metrics:", summary)
+            assert "PUMP_A" in power_df["pump_name"].unique()
+            assert "STN01_LINE01_PUMP_C" in power_df["pump_name"].unique() # Inferred name
+            # Further assertions can be added based on expected calculation results
+        else:
+            print(f"Power calculation failed: {mock_ctx.session.state.get('error_message_power_calc')}")
 
-    print("\nPowerConsumptionCalculationAgent ADK tests completed.")
+        print("\nPowerConsumptionCalculationAgent ADK tests completed.")
 
-    asyncio.run(test_pc_agent())
+    asyncio.run(test_pc_agent()) # This call remains outside the function
+
+power_calc_agent = PowerConsumptionCalculationAgent(
+    name="PowerConsumptionCalculationAgent",
+    description="Converts sensor data to power consumption metrics."
+)
