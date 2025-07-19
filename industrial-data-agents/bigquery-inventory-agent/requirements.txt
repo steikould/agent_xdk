@@ -1,0 +1,5 @@
+google-adk
+google-cloud-bigquery
+Office365-REST-Python-Client
+transformers
+torch
