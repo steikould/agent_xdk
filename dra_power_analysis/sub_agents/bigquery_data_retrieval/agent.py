@@ -162,88 +162,55 @@ class BigQueryDataAgent(BaseAgent):
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    DEFAULT_PROJECT_ID: ClassVar[str] = 'your-gcp-project-id'
-    DEFAULT_DATASET_ID: ClassVar[str] = 'your_dataset_id'
-    DEFAULT_TABLE_ID: ClassVar[str] = "your_table_id"
+    # Make these required or use env vars
+    project_id: str = Field(..., description="The GCP Project ID for BigQuery.")
+    dataset_id: str = Field(..., description="The BigQuery Dataset ID.")
+    table_id: str = Field(..., description="The BigQuery Table ID.")
+    use_mock: bool = Field(default=False, description="Set to True to use a mock BigQuery client for testing.")
 
-    project_id: str = Field(default=DEFAULT_PROJECT_ID, description="The GCP Project ID for BigQuery.")
-    dataset_id: str = Field(default=DEFAULT_DATASET_ID, description="The BigQuery Dataset ID.")
-    table_id: str = Field(default=DEFAULT_TABLE_ID, description="The BigQuery Table ID.")
-    use_mock: bool = Field(default=False, description="Set to True to use a mock BigQuery client for testing. Set to False for real BigQuery.")
-
-    client: Optional[bigquery.Client] = Field(default=None, exclude=True)
-    logger: logging.Logger = Field(default_factory=lambda: logging.getLogger(__name__))
-
-    query_bigquery_data_tool: Optional[FunctionTool] = Field(default=None, exclude=True)
+    # Private fields
+    _client: Optional[bigquery.Client] = None
+    _logger: logging.Logger = Field(default_factory=lambda: logging.getLogger(__name__), exclude=True)
     
-    # --- NEW FIX: Declare 'tools' as a Pydantic field ---
-    # This ensures Pydantic is aware of it from the start and doesn't complain.
-    # It's Optional because it will be populated in model_post_init.
-    tools: Optional[List[FunctionTool]] = Field(default_factory=list, exclude=True)
+    # Public tools field - don't exclude if it needs to be accessible
+    tools: List[FunctionTool] = Field(default_factory=list)
 
+    def __init__(self, **kwargs: Any):
+        super().__init__(**kwargs)
+        self._logger = logging.getLogger(self.name or __name__)
 
-    def __init__(
-        self,
-        name: str = "BigQueryDataAgent",
-        description: str = "Queries sensor data from BigQuery using parameterized SQL for specific locations and time ranges.",
-        **kwargs: Any
-    ):
-        # Pass all relevant kwargs to the super().__init__
-        # This allows BaseAgent (and Pydantic) to set up all its inherited fields.
-        super().__init__(name=name, description=description, **kwargs)
-
-        # Ensure logger is available
-        if not hasattr(self, 'logger') or self.logger is None:
-             self.logger = logging.getLogger(self.name or __name__)
-        
-        # --- BigQuery client initialization (still here) ---
-        if self.use_mock:
-            self.logger.error("Mock client requested, but this agent is designed for real BigQuery. Please set use_mock=False.")
-            raise ValueError("Mock client is not supported in this version of BigQueryDataAgent.") 
-
-        if not BIGQUERY_AVAILABLE:
-            self.logger.error("google-cloud-bigquery library not found. Cannot initialize real BigQuery client.")
-            raise ImportError("Required 'google-cloud-bigquery' library not found. Please install it.")
-        else:
-            try:
-                self.client = bigquery.Client(project=self.project_id)
-                self.logger.info(
-                    f"Initialized Google BigQuery Client for project: {self.project_id}"
-                )
-            except Exception as e:
-                self.logger.exception(
-                    f"Failed to initialize real BigQuery client for project {self.project_id}: {e}. "
-                    "Ensure correct GCP authentication and project ID."
-                )
-                raise RuntimeError(f"BigQuery client initialization failed: {e}")
-
-    # --- Use model_validator for initializing tools and populating self.tools ---
-    # This method runs AFTER __init__ and all Pydantic field validation.
     @model_validator(mode='after')
-    def setup_tools(self) -> "BigQueryDataAgent":
-        # Ensure client and logger are ready before creating the tool
-        if self.client is None:
-            self.logger.error("BigQuery client not initialized, cannot set up tool. 'tools' list will be empty.")
-            self.tools = [] # Explicitly set to empty list if client failed
-            return self
-
-        self.query_bigquery_data_tool = FunctionTool(
+    def setup_client_and_tools(self) -> "BigQueryDataAgent":
+        """Initialize BigQuery client and create tools after model validation."""
+        
+        if self.use_mock:
+            raise ValueError("Mock client is not supported in this version of BigQueryDataAgent.")
+        
+        if not BIGQUERY_AVAILABLE:
+            raise ImportError("Required 'google-cloud-bigquery' library not found. Please install it.")
+        
+        # Initialize BigQuery client
+        try:
+            self._client = bigquery.Client(project=self.project_id)
+            self._logger.info(f"Initialized Google BigQuery Client for project: {self.project_id}")
+        except Exception as e:
+            self._logger.exception(f"Failed to initialize BigQuery client: {e}")
+            raise RuntimeError(f"BigQuery client initialization failed: {e}")
+        
+        # Create the tool
+        query_tool = FunctionTool(
             func=functools.partial(
                 _query_bigquery_tool_func,
-                bq_client=self.client,
-                logger=self.logger,
+                bq_client=self._client,
+                logger=self._logger,
                 project_id=self.project_id,
                 dataset_id=self.dataset_id,
                 table_id=self.table_id,
             )
         )
-
-        # Now, assign the created tool to the 'tools' list
-        # This 'tools' attribute is a Pydantic Field, and it's being populated here.
-        self.tools = [self.query_bigquery_data_tool]
         
+        self.tools = [query_tool]
         return self
-
 
 # --- Local Testing Block (unchanged) ---
 if __name__ == "__main__":
