@@ -11,7 +11,6 @@ from office365.sharepoint.lists.list import List as SPList
 from google.adk.agents import Agent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
-from google.adk import types
 
 
 class SharePointAgent:
@@ -499,10 +498,10 @@ How can I help you with your SharePoint documents today?""",
             )
             
             # Create content for the message
-            content = types.Content(
-                role='user', 
-                parts=[types.Part(text=message)]
-            )
+            content = {
+                'role': 'user',
+                'parts': [{'text': message}]
+            }
             
             # Run the agent
             events = runner.run_async(

@@ -1,0 +1,36 @@
+sample_test_data = {
+    "valid_data": [
+        {
+            "timestamp": "2024-01-01T00:00:00",
+            "flow_rate": 100.5,
+            "pressure": 50.2,
+            "temperature": 25.1,
+            "pump_id": "pump_001"
+        },
+        {
+            "timestamp": "2024-01-01T01:00:00",
+            "flow_rate": 102.3,
+            "pressure": 51.1,
+            "temperature": 24.8,
+            "pump_id": "pump_001"
+        }
+    ],
+    "missing_values_data": [
+        {
+            "timestamp": "2024-01-01T00:00:00",
+            "flow_rate": None,
+            "pressure": 50.2,
+            "temperature": 25.1,
+            "pump_id": "pump_001"
+        }
+    ],
+    "outlier_data": [
+        {
+            "timestamp": "2024-01-01T00:00:00",
+            "flow_rate": 1000.0,  # Outlier
+            "pressure": 500.0,     # Outlier
+            "temperature": 25.1,
+            "pump_id": "pump_001"
+        }
+    ]
+}

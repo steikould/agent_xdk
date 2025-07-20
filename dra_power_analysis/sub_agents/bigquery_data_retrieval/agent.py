@@ -170,14 +170,14 @@ class BigQueryDataAgent(BaseAgent):
 
     # Private fields
     _client: Optional[bigquery.Client] = None
-    _logger: logging.Logger = Field(default_factory=lambda: logging.getLogger(__name__), exclude=True)
+    ilogger: logging.Logger = Field(default_factory=lambda: logging.getLogger(__name__), exclude=True)
     
     # Public tools field - don't exclude if it needs to be accessible
     tools: List[FunctionTool] = Field(default_factory=list)
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        self._logger = logging.getLogger(self.name or __name__)
+        self.ilogger = logging.getLogger(self.name or __name__)
 
     @model_validator(mode='after')
     def setup_client_and_tools(self) -> "BigQueryDataAgent":
@@ -192,9 +192,9 @@ class BigQueryDataAgent(BaseAgent):
         # Initialize BigQuery client
         try:
             self._client = bigquery.Client(project=self.project_id)
-            self._logger.info(f"Initialized Google BigQuery Client for project: {self.project_id}")
+            self.ilogger.info(f"Initialized Google BigQuery Client for project: {self.project_id}")
         except Exception as e:
-            self._logger.exception(f"Failed to initialize BigQuery client: {e}")
+            self.ilogger.exception(f"Failed to initialize BigQuery client: {e}")
             raise RuntimeError(f"BigQuery client initialization failed: {e}")
         
         # Create the tool
@@ -202,7 +202,7 @@ class BigQueryDataAgent(BaseAgent):
             func=functools.partial(
                 _query_bigquery_tool_func,
                 bq_client=self._client,
-                logger=self._logger,
+                logger=self.ilogger,
                 project_id=self.project_id,
                 dataset_id=self.dataset_id,
                 table_id=self.table_id,

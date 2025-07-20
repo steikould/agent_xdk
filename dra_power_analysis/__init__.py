@@ -1,14 +1,20 @@
-# This file makes 'dra_power_analysis' a Python package.
+# dra_power_analysis/__init__.py
 
-# Optionally, you can make specific classes or functions available
-# when the package is imported, e.g.:
-# from .main import run_application
-# from .agents.root_orchestrator_agent import RootOrchestratorAgent
+"""
+DRA Power Analysis System
 
-# For now, keeping it simple. Users will import specific modules directly.
-# e.g., from dra_power_analysis.agents.root_orchestrator_agent import RootOrchestratorAgent
-# or run using `python -m dra_power_analysis.main`
+A multi-agent system for analyzing pump power consumption in energy pipelines.
+"""
 
-# __version__ = "0.1.0"
-# APP_NAME = "DRA Power Analysis System"
-# from . import agent
+__version__ = "0.1.0"
+APP_NAME = "DRA Power Analysis System"
+
+# Import the main root agent for easy access
+from .agent import root_agent
+
+# Make key components available at package level
+__all__ = [
+    "root_agent",
+    "APP_NAME",
+    "__version__"
+]

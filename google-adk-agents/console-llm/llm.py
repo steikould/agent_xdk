@@ -9,7 +9,6 @@ from office365.sharepoint.client_context import ClientContext
 from google.adk.agents import Agent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
-from google.adk import types
 
 
 class ConsoleLLM:
@@ -374,10 +373,10 @@ Remember: You're both a SharePoint specialist AND a general AI assistant. Adapt 
             )
             
             # Create content
-            content = types.Content(
-                role='user',
-                parts=[types.Part(text=message)]
-            )
+            content = {
+                'role': 'user',
+                'parts': [{'text': message}]
+            }
             
             # Run the agent
             events = runner.run_async(

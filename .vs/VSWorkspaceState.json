@@ -1,16 +1,16 @@
 {
   "ExpandedNodes": [
     "",
-    "\\dra_power_analysis\\agents",
-    "\\dra_power_analysis\\shared_libraries",
+    "\\dra_power_analysis",
     "\\dra_power_analysis\\sub_agents",
     "\\dra_power_analysis\\sub_agents\\bigquery_data_retrieval",
-    "\\dra_power_analysis\\sub_agents\\data_quality",
-    "\\google-adk-agents\\jira-agent",
+    "\\google-adk-agents",
     "\\google-adk-agents\\sharepoint-agent",
     "\\industrial-data-agents",
-    "\\industrial-data-agents\\bigquery-inventory-agent"
+    "\\industrial-data-agents\\bigquery-inventory-agent",
+    "\\industrial-data-agents\\digital-twinning-agent",
+    "\\industrial-data-agents\\industrial-equipment-agent"
   ],
-  "SelectedNode": "\\dra_power_analysis",
+  "SelectedNode": "\\dra_power_analysis\\sub_agents\\bigquery_data_retrieval\\agent.py",
   "PreviewInSolutionExplorer": false
 }

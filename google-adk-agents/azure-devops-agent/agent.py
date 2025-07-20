@@ -10,7 +10,6 @@ from azure.devops.v6_0.work_item_tracking.models import WorkItemStateColor
 from google.adk.agents import Agent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
-from google.adk import types
 
 
 class AzureDevOpsAgent:
@@ -618,10 +617,10 @@ How can I help you manage your Azure DevOps work items today?""",
             )
             
             # Create content for the message
-            content = types.Content(
-                role='user', 
-                parts=[types.Part(text=message)]
-            )
+            content = {
+                'role': 'user',
+                'parts': [{'text': message}]
+            }
             
             # Run the agent
             events = runner.run_async(
