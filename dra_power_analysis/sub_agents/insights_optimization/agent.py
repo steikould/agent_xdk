@@ -46,9 +46,9 @@ class InsightsOptimizationAgent(BaseAgent):
     """
 
     # Class constants
-    EFFICIENCY_DEGRADATION_THRESHOLD = 0.05  # 5% drop from baseline/average
-    HIGH_POWER_CONSUMPTION_FACTOR = 2.0  # Max power > X times median power
-    LOW_EFFICIENCY_ABSOLUTE_THRESHOLD = 0.60
+    EFFICIENCY_DEGRADATION_THRESHOLD: ClassVar[float] = 0.05  # 5% drop from baseline/average
+    HIGH_POWER_CONSUMPTION_FACTOR: ClassVar[float] = 2.0  # Max power > X times median power
+    LOW_EFFICIENCY_ABSOLUTE_THRESHOLD: ClassVar[float] = 0.60
 
     def __init__(self, name: str = "InsightsOptimizationAgent",
                  description: str = "Generates optimization insights", **kwargs):

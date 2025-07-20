@@ -46,10 +46,10 @@ class UserInterfaceAgent(BaseAgent):
     """
 
     # Configuration for validation
-    VALID_LOCATIONS = ["STN_A001", "STN_B002", "STN_C003"]
-    PIPELINE_LINE_NUMBER_FORMAT_PREFIX = "PL"
-    MAX_DATE_RANGE_DAYS = 365
-    MAX_PAST_DAYS_DATA_RETENTION = 5 * 365
+    VALID_LOCATIONS: ClassVar[List[str]] = ["STN_A001", "STN_B002", "STN_C003"]
+    PIPELINE_LINE_NUMBER_FORMAT_PREFIX: ClassVar[str] = "PL"
+    MAX_DATE_RANGE_DAYS: ClassVar[int] = 365
+    MAX_PAST_DAYS_DATA_RETENTION: ClassVar[int] = 5 * 365
 
     def __init__(self, name: str = "UserInterfaceAgent",
                  description: str = "Handles user interactions",
