@@ -40,12 +40,12 @@ class PowerConsumptionCalculationAgent(BaseAgent):
     """
 
     # Class constants
-    DEFAULT_MOTOR_EFFICIENCY = 0.90
-    DEFAULT_PUMP_EFFICIENCY = 0.75
-    FLUID_DENSITY_KG_M3 = 900
-    GRAVITY_ACCEL_M_S2 = 9.81
+    DEFAULT_MOTOR_EFFICIENCY: ClassVar[float] = 0.90
+    DEFAULT_PUMP_EFFICIENCY: ClassVar[float] = 0.75
+    FLUID_DENSITY_KG_M3: ClassVar[int] = 900
+    GRAVITY_ACCEL_M_S2: ClassVar[float] = 9.81
 
-    PUMP_SPECIFIC_DATA = {
+    PUMP_SPECIFIC_DATA: ClassVar[Dict[str, Dict[str, float]]] = {
         "PUMP_A": {
             "motor_efficiency": 0.92,
             "pump_hydraulic_efficiency": 0.78,
